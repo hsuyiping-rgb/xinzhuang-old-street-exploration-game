@@ -1,0 +1,13 @@
+{
+  "name": "xinzhuang-old-street-exploration-game",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "新莊老街戶外教育探索闖關遊戲",
+  "scripts": {
+    "dev": "node scripts/serve.mjs game 5173",
+    "build": "node scripts/build.mjs",
+    "preview": "node scripts/serve.mjs dist 4173",
+    "check": "node --check game/app.js && node --check scripts/serve.mjs && node --check scripts/build.mjs && node scripts/build.mjs"
+  }
+}
