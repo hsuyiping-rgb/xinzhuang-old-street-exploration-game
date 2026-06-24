@@ -440,6 +440,32 @@ function speakFeedback(message) {
     window.speechSynthesis.speak(utterance);
 }
 
+// 答對時播放該題答案的延伸補充音檔（內含肯定語與文史延伸），取代原本的提示音效。
+// 檔名對應 stageFeedback[stageId].correct[clipNumber-1]；若音檔不存在或被瀏覽器擋下，
+// 自動退回原本的答對音效＋語音合成，確保仍有回饋。
+function playCorrectFeedback(stageId, clipNumber, message) {
+    if (state.isMuted) return;
+
+    const fileName = `feedback_${stageId}_correct_${clipNumber}.mp3`;
+    const audio = new Audio(`assets/audio/${fileName}`);
+    audio.volume = 1;
+
+    // 沿用 currentFeedbackAudio 機制：開始新回饋前先停掉前一段回饋
+    if (currentFeedbackAudio) {
+        currentFeedbackAudio.pause();
+        currentFeedbackAudio.currentTime = 0;
+    }
+    currentFeedbackAudio = audio;
+
+    audio.play()
+        .then(() => console.log(`Playing feedback audio: ${fileName}`))
+        .catch(err => {
+            console.warn(`Feedback audio assets/audio/${fileName} unavailable; fallback to SFX + TTS.`, err);
+            triggerCorrectSfx();
+            speakFeedback(message);
+        });
+}
+
 function giveContextFeedback(type, explicitMessage = '') {
     const pool = stageFeedback[currentStageId] && stageFeedback[currentStageId][type];
     const index = currentQuestData.feedbackIndex || 0;
@@ -448,9 +474,21 @@ function giveContextFeedback(type, explicitMessage = '') {
         : '再看一次現場線索，調整推理後繼續挑戰。'));
     currentQuestData.feedbackIndex = index + 1;
 
-    if (type === 'correct') triggerCorrectSfx();
-    else triggerWrongSfx();
-    speakFeedback(message);
+    if (type === 'correct') {
+        // 決定要播放哪一段延伸音檔：終極挑戰用題號，一般關卡對齊所選回饋文字
+        let clipNumber;
+        if (currentStageId === 'final') {
+            clipNumber = currentQuestData.currentQ || 1;
+        } else if (pool && pool.length) {
+            clipNumber = (index % pool.length) + 1;
+        } else {
+            clipNumber = 1;
+        }
+        playCorrectFeedback(currentStageId, clipNumber, message);
+    } else {
+        triggerWrongSfx();
+        speakFeedback(message);
+    }
     showAnswerFeedback(type, message);
     return message;
 }
@@ -461,15 +499,169 @@ window.addEventListener('DOMContentLoaded', () => {
     // 模擬載入進度條
     let progress = 0;
     const progressFill = document.getElementById('loading-progress');
+    const saved = loadProgress();
     const loadTimer = setInterval(() => {
         progress += 4;
         progressFill.style.width = `${progress}%`;
         if (progress >= 100) {
             clearInterval(loadTimer);
-            showScreen('screen-intro');
+            // 若偵測到先前未完成的探索進度，直接回復到遊戲畫面
+            if (saved && saved.teamName && saved.role) {
+                restoreProgress(saved);
+            } else {
+                showScreen('screen-intro');
+            }
         }
     }, 80);
 });
+
+// 遊戲內非阻斷式通知（取代原生 alert，避免卡住背景音樂與動畫）
+// 類型依訊息前綴自動判斷：成功（金）、警示（紅）、資訊（預設）。
+function showToast(message, options = {}) {
+    let stack = document.getElementById('toast-stack');
+    if (!stack) {
+        stack = document.createElement('div');
+        stack.id = 'toast-stack';
+        stack.className = 'toast-stack';
+        document.body.appendChild(stack);
+    }
+
+    let type = options.type;
+    if (!type) {
+        if (/【(破解成功|獲得寶物|發現新關卡|使用道具|任務開始)】/.test(message)) {
+            type = 'success';
+        } else if (/【(警告|時空迷霧|探索證據未完成)】|尚未|請先|請輸入|無法|不能|不足|已滿|沒有|歸零|被時空迷霧/.test(message)) {
+            type = 'warn';
+        } else {
+            type = 'info';
+        }
+    }
+
+    const icons = { success: '🎉', warn: '⚠️', info: '📜' };
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+
+    const icon = document.createElement('span');
+    icon.className = 'toast-icon';
+    icon.textContent = icons[type];
+    toast.appendChild(icon);
+
+    const textWrap = document.createElement('div');
+    textWrap.className = 'toast-text';
+    message.split('\n').filter(line => line.trim() !== '').forEach((line, index) => {
+        const row = document.createElement('div');
+        row.className = index === 0 ? 'toast-title' : 'toast-line';
+        row.textContent = line;
+        textWrap.appendChild(row);
+    });
+    toast.appendChild(textWrap);
+
+    stack.appendChild(toast);
+
+    const duration = options.duration ?? (type === 'success' ? 4000 : 3200);
+    const dismiss = () => {
+        if (toast.dataset.dismissing) return;
+        toast.dataset.dismissing = 'true';
+        toast.classList.add('toast-out');
+        setTimeout(() => toast.remove(), 300);
+    };
+    const timer = setTimeout(dismiss, duration);
+    toast.addEventListener('click', () => {
+        clearTimeout(timer);
+        dismiss();
+    });
+    return toast;
+}
+
+// 進度自動保存（localStorage）— 避免平板誤觸重整導致整場進度歸零
+const SAVE_KEY = 'xinzhuang-oldstreet-save-v1';
+const PERSIST_FIELDS = [
+    'teamName', 'role', 'score', 'hp', 'inventory',
+    'unlockedStages', 'completedStages', 'badges',
+    'currentGps', 'isMuted', 'photos', 'evidenceRecords', 'screen'
+];
+
+function saveProgress() {
+    // 尚未選好隊名／角色（還沒正式開始）就不保存
+    if (!state.teamName || !state.role) return;
+
+    const data = {};
+    PERSIST_FIELDS.forEach(key => { data[key] = state[key]; });
+    data.startTime = state.startTime ? state.startTime.toISOString() : null;
+
+    try {
+        localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+    } catch (err) {
+        // 多半是實拍照片的 base64 撐爆配額：改存不含照片影像的精簡版
+        try {
+            const slim = {
+                ...data,
+                photos: (data.photos || []).map(photo => ({
+                    ...photo,
+                    src: photo.src && photo.src.startsWith('data:') ? null : photo.src
+                }))
+            };
+            localStorage.setItem(SAVE_KEY, JSON.stringify(slim));
+        } catch (err2) {
+            console.warn('進度保存失敗：', err2);
+        }
+    }
+}
+
+function loadProgress() {
+    try {
+        const raw = localStorage.getItem(SAVE_KEY);
+        return raw ? JSON.parse(raw) : null;
+    } catch {
+        return null;
+    }
+}
+
+function clearProgress() {
+    try { localStorage.removeItem(SAVE_KEY); } catch {}
+}
+
+// 將存檔還原為可遊玩的遊戲畫面
+function restoreProgress(data) {
+    state.teamName = data.teamName;
+    state.role = data.role;
+    state.score = data.score ?? 0;
+    state.hp = data.hp ?? 100;
+    state.inventory = data.inventory ?? { bakery: 0, wenchang: 0, dizang: 0 };
+    state.unlockedStages = data.unlockedStages ?? ['tutorial'];
+    state.completedStages = data.completedStages ?? [];
+    state.badges = data.badges ?? [];
+    state.currentGps = data.currentGps ?? 'tutorial';
+    state.isMuted = !!data.isMuted;
+    state.photos = (data.photos ?? []).filter(photo => photo.src);
+    state.evidenceRecords = data.evidenceRecords ?? [];
+    state.startTime = data.startTime ? new Date(data.startTime) : new Date();
+
+    // 重建頂部與背包 / 體力 / 分數 UI
+    applyRoleDisplay();
+    updateInventoryUI();
+    modifyHp(0);
+    modifyScore(0);
+
+    // 重建地圖鎖定狀態與 GPS 面板
+    updateMapStagesState();
+    const gpsConfig = stagesConfig[state.currentGps];
+    if (gpsConfig) {
+        document.getElementById('gps-status').innerText = `目前位置：靠近 ${gpsConfig.title.split('：')[0]}`;
+    }
+    document.querySelectorAll('.gps-buttons .btn').forEach(btn => btn.classList.remove('active'));
+    const gpsBtn = document.querySelector(`.gps-buttons .btn[onclick*="${state.currentGps}"]`);
+    if (gpsBtn) gpsBtn.classList.add('active');
+
+    checkGameCompletion();
+
+    // 還原靜音圖示（不在此切換音樂，交給 showScreen 處理）
+    document.getElementById('audio-icon-on').style.display = state.isMuted ? 'none' : 'block';
+    document.getElementById('audio-icon-off').style.display = state.isMuted ? 'block' : 'none';
+
+    showScreen('screen-game');
+    showToast('【任務開始】\n已自動回復上次的探索進度，繼續守護老街！', { type: 'success' });
+}
 
 // 切換主畫面
 function showScreen(screenId) {
@@ -499,7 +691,7 @@ function proceedToIntroNext() {
     triggerClickSfx();
     const teamNameInput = document.getElementById('team-name').value.trim();
     if (!teamNameInput) {
-        alert("請輸入小隊名稱！");
+        showToast("請輸入小隊名稱！");
         return;
     }
     state.teamName = teamNameInput;
@@ -525,14 +717,8 @@ function selectRole(roleId) {
     btn.classList.remove('disabled');
 }
 
-// 確認角色出發
-function startGame() {
-    triggerClickSfx();
-    state.startTime = new Date();
-    
-    // 更新 UI 上的狀態值
-    document.getElementById('display-team-name').innerText = state.teamName;
-    
+// 依目前角色更新頂部顯示（startGame 與回復進度共用）
+function applyRoleDisplay() {
     let roleText = "歷史解碼師";
     let roleIcon = "🔍";
     if (state.role === 'surveyor') {
@@ -542,14 +728,23 @@ function startGame() {
         roleText = "民俗調查員";
         roleIcon = "🏮";
     }
-    
+    document.getElementById('display-team-name').innerText = state.teamName;
     document.getElementById('display-role-name').innerText = roleText;
     document.getElementById('display-role-icon').innerText = roleIcon;
-    
+}
+
+// 確認角色出發
+function startGame() {
+    triggerClickSfx();
+    state.startTime = new Date();
+
+    applyRoleDisplay();
+
     showScreen('screen-game');
-    
+    saveProgress();
+
     // 提示新手關卡可以點擊
-    alert(`【任務開始】\n請從小隊背包或地圖上的 🏁「拜廟禮儀」關卡開始解密！`);
+    showToast(`【任務開始】\n請從小隊背包或地圖上的 🏁「拜廟禮儀」關卡開始解密！`);
 }
 
 
@@ -604,6 +799,7 @@ function tryUnlockStage(stageId) {
     
     if (canUnlock) {
         state.unlockedStages.push(stageId);
+        saveProgress();
         // 更新 SVG 地圖 Marker
         const marker = document.getElementById(`marker-${stageId}`);
         if (marker) {
@@ -611,10 +807,10 @@ function tryUnlockStage(stageId) {
         }
         
         // 抵達與解鎖只提供位置提示，不播放作答鼓勵或掌聲。
-        alert(`【發現新關卡】\n你已抵達 ${stagesConfig[stageId].title}，解鎖新闖關任務！`);
+        showToast(`【發現新關卡】\n你已抵達 ${stagesConfig[stageId].title}，解鎖新闖關任務！`);
     } else {
         // 如果是主線未開，顯示警告
-        alert(`【時空迷霧】\n此處尚未解鎖！請依序完成前面的主線探索（必須先完成新手關卡與慈祐宮關卡）。`);
+        showToast(`【時空迷霧】\n此處尚未解鎖！請依序完成前面的主線探索（必須先完成新手關卡與慈祐宮關卡）。`);
     }
 }
 
@@ -639,21 +835,21 @@ document.querySelectorAll('.map-marker').forEach(marker => {
         // 檢查是否已解鎖
         if (!state.unlockedStages.includes(stageId)) {
             triggerClickSfx();
-            alert("此景點被時空迷霧籠罩，請先完成前置關卡並移動至該景點附近！");
+            showToast("此景點被時空迷霧籠罩，請先完成前置關卡並移動至該景點附近！");
             return;
         }
         
         // 檢查是否已完成
         if (state.completedStages.includes(stageId)) {
             triggerClickSfx();
-            alert("此關卡已成功破解！");
+            showToast("此關卡已成功破解！");
             return;
         }
         
         // 檢查體力值
         if (state.hp <= 0) {
             triggerClickSfx();
-            alert("體力值為 0！請先打開小隊背包使用「鹹光餅」補充體力！");
+            showToast("體力值為 0！請先打開小隊背包使用「鹹光餅」補充體力！");
             return;
         }
         
@@ -669,12 +865,13 @@ function updateInventoryUI() {
     document.getElementById('count-bakery').innerText = state.inventory.bakery;
     document.getElementById('count-wenchang').innerText = state.inventory.wenchang;
     document.getElementById('count-dizang').innerText = state.inventory.dizang;
+    saveProgress();
 }
 
 // 使用背包道具
 function useInventoryItem(itemId) {
     if (state.inventory[itemId] <= 0) {
-        alert("你目前沒有這個道具！可在特定關卡挑戰成功後獲得。");
+        showToast("你目前沒有這個道具！可在特定關卡挑戰成功後獲得。");
         return;
     }
     
@@ -683,17 +880,17 @@ function useInventoryItem(itemId) {
     if (itemId === 'bakery') {
         // 鹹光餅：恢復 50 體力
         if (state.hp >= 100) {
-            alert("小隊體力值已滿，無須吃鹹光餅！");
+            showToast("小隊體力值已滿，無須吃鹹光餅！");
             return;
         }
         state.inventory.bakery--;
         modifyHp(50);
-        alert("【使用道具】\n吃下了平安鹹光餅！小隊體力恢復 50 點！");
+        showToast("【使用道具】\n吃下了平安鹹光餅！小隊體力恢復 50 點！");
     } else if (itemId === 'wenchang') {
         // 智慧筆：只能在答題關卡內使用
         const modal = document.getElementById('modal-quest');
         if (!modal.classList.contains('active')) {
-            alert("智慧筆只能在關卡解謎答題時使用！");
+            showToast("智慧筆只能在關卡解謎答題時使用！");
             return;
         }
         state.inventory.wenchang--;
@@ -703,13 +900,13 @@ function useInventoryItem(itemId) {
         // 平安符：抵擋答錯扣分
         const modal = document.getElementById('modal-quest');
         if (!modal.classList.contains('active')) {
-            alert("平安符只能在關卡解謎中抵擋惡靈扣分！");
+            showToast("平安符只能在關卡解謎中抵擋惡靈扣分！");
             return;
         }
         state.inventory.dizang--;
         state.hasDizangBuff = true;
         document.getElementById('item-slot-dizang').classList.add('active');
-        alert("【使用道具】\n啟用了地藏平安符！將會自動抵擋下一次答錯的扣分與扣體力懲罰！");
+        showToast("【使用道具】\n啟用了地藏平安符！將會自動抵擋下一次答錯的扣分與扣體力懲罰！");
     }
     
     updateInventoryUI();
@@ -720,11 +917,12 @@ function modifyHp(amount) {
     state.hp = Math.max(0, Math.min(100, state.hp + amount));
     document.getElementById('hp-bar').style.width = `${state.hp}%`;
     document.getElementById('hp-text').innerText = `${state.hp}/100`;
-    
+    saveProgress();
+
     // 如果體力扣到 0，發出嚴重警報
     if (state.hp <= 0) {
         triggerWrongSfx();
-        alert("【警告】小隊體力值歸零！請立即吃鹹光餅補充體力，否則無法開啟新關卡！");
+        showToast("【警告】小隊體力值歸零！請立即吃鹹光餅補充體力，否則無法開啟新關卡！");
     }
 }
 
@@ -732,6 +930,7 @@ function modifyHp(amount) {
 function modifyScore(amount) {
     state.score = Math.max(0, state.score + amount);
     document.getElementById('score-text').innerText = state.score;
+    saveProgress();
 }
 
 
@@ -904,7 +1103,7 @@ async function startEvidenceRecording() {
         document.getElementById('btn-record-stop').disabled = false;
         document.getElementById('evidence-status').innerText = '錄音中…請完整說明觀察與推論';
     } catch (error) {
-        alert('無法啟用麥克風。請允許瀏覽器使用麥克風，或改用「上傳既有錄音」。');
+        showToast('無法啟用麥克風。請允許瀏覽器使用麥克風，或改用「上傳既有錄音」。');
     }
 }
 
@@ -1179,13 +1378,13 @@ function chooseTutorialGate(gate) {
     triggerClickSfx();
     if (gate === 'right') {
         triggerCorrectSfx();
-        alert("【正確】\n龍門進（面朝廟的右手邊）！迎好運成功！開啟進廟第二步。");
+        showToast("【正確】\n龍門進（面朝廟的右手邊）！迎好運成功！開啟進廟第二步。");
         document.getElementById('tutorial-step-2').style.display = 'block';
         currentQuestData.gatePassed = true;
     } else {
         const message = giveContextFeedback('wrong');
         modifyHp(-20);
-        alert(`【重新判讀方向】\n${message}\n體力減少 20 點，調整方向後再試一次。`);
+        showToast(`【重新判讀方向】\n${message}\n體力減少 20 點，調整方向後再試一次。`);
     }
 }
 
@@ -1193,11 +1392,11 @@ function clickTutorialInstrument(inst) {
     if (inst === 'bell') {
         initAudioContext();
         synthCorrect(); // 磬/鐘聲
-        alert("【鐘聲響起】\n迎接神明，宣告你的到來！");
+        showToast("【鐘聲響起】\n迎接神明，宣告你的到來！");
         currentQuestData.bellClicked = true;
     } else {
         triggerDrumSfx(); // 鼓聲
-        alert("【大鼓重擊】\n大鼓通報，宣告探險隊伍抵達！");
+        showToast("【大鼓重擊】\n大鼓通報，宣告探險隊伍抵達！");
         currentQuestData.drumClicked = true;
     }
 }
@@ -1235,12 +1434,12 @@ function clickMatch(type, value) {
             currentQuestData.pos = null;
             
             if (currentQuestData.matches >= 2) {
-                alert("【門神解鎖】\n秦叔寶與尉遲恭兩位門神將軍歸位！解密成功，開啟第二步。");
+                showToast("【門神解鎖】\n秦叔寶與尉遲恭兩位門神將軍歸位！解密成功，開啟第二步。");
                 document.getElementById('ciyou-step-2').style.display = 'block';
             }
         } else {
             const message = giveContextFeedback('wrong');
-            alert(message);
+            showToast(message);
             document.querySelectorAll('.match-item:not(.matched)').forEach(el => el.classList.remove('selected'));
             currentQuestData.hero = null;
             currentQuestData.pos = null;
@@ -1256,7 +1455,7 @@ function clickBat(el) {
     document.getElementById('ciyou-bat-count').innerText = currentQuestData.batsFound;
     
     if (currentQuestData.batsFound >= 3) {
-        alert("【蝙蝠賜福】\n成功找出所有 3 隻隱藏的蝙蝠！福氣飛來，挑戰完成！");
+        showToast("【蝙蝠賜福】\n成功找出所有 3 隻隱藏的蝙蝠！福氣飛來，挑戰完成！");
     }
 }
 
@@ -1269,7 +1468,7 @@ function clickNail(btn) {
         
         if (currentQuestData.nailsClicked >= 9) {
             triggerCorrectSfx();
-            alert("【防禦啟動】\n敲擊大門啟動了 108 門釘神盾防禦！開啟第二步問答。");
+            showToast("【防禦啟動】\n敲擊大門啟動了 108 門釘神盾防禦！開啟第二步問答。");
             document.getElementById('wusheng-step-2').style.display = 'block';
         }
     }
@@ -1304,12 +1503,12 @@ function clickOption(btn, isCorrect) {
         giveContextFeedback('wrong');
         
         if (state.hasDizangBuff) {
-            alert("【平安符抵擋】\n答錯了！但使用中的「地藏平安符」為你們擋下了體力扣除懲罰！");
+            showToast("【平安符抵擋】\n答錯了！但使用中的「地藏平安符」為你們擋下了體力扣除懲罰！");
             state.hasDizangBuff = false;
             document.getElementById('item-slot-dizang').classList.remove('active');
         } else {
             modifyHp(-20);
-            alert("【再挑戰】這次答案還不正確，體力減少 20 點。別急，重新觀察現場線索再試一次！");
+            showToast("【再挑戰】這次答案還不正確，體力減少 20 點。別急，重新觀察現場線索再試一次！");
         }
         
         // 重新啟用按鈕讓學生重答
@@ -1406,7 +1605,7 @@ function checkCanvasCleared() {
         currentQuestData.scratchPassed = true;
         ctx.clearRect(0, 0, canvas.width, canvas.height); // 全部擦除
         triggerCorrectSfx();
-        alert("【拓印成功】\n歷史碑文『奉兩憲示禁碑』重見天日！閩粵兩族和平共處，挑戰成功！");
+        showToast("【拓印成功】\n歷史碑文『奉兩憲示禁碑』重見天日！閩粵兩族和平共處，挑戰成功！");
     }
 }
 
@@ -1430,7 +1629,7 @@ function dropGrass(ev) {
     horse.innerText = '🐴😋';
     horse.style.borderColor = 'var(--color-secondary)';
     
-    alert("【餵食成功】\n祿馬神享用了新鮮草料，發出嘶鳴！開啟第二步諧音挑戰。");
+    showToast("【餵食成功】\n祿馬神享用了新鮮草料，發出嘶鳴！開啟第二步諧音挑戰。");
     currentQuestData.horseFed = true;
     document.getElementById('wenchang-step-2').style.display = 'block';
 }
@@ -1479,7 +1678,7 @@ function clickEnemyShip(ship) {
     ship.innerText = '💥🔥';
     ship.style.borderColor = 'var(--color-secondary)';
     currentQuestData.shipFound = true;
-    alert("【警報大作】\n發現對岸入侵的敵船！哨兵擊鼓示警，全老街民兵戒備！挑戰成功！");
+    showToast("【警報大作】\n發現對岸入侵的敵船！哨兵擊鼓示警，全老街民兵戒備！挑戰成功！");
 }
 
 // 8. 地藏庵官將首兵器配對
@@ -1515,12 +1714,12 @@ function clickFolkMatch(type, value) {
             currentQuestData.weapon = null;
             
             if (currentQuestData.matches >= 2) {
-                alert("【官將首降臨】\n增、損將軍兵器歸位，展現威武身段！解密成功，開啟第二步。");
+                showToast("【官將首降臨】\n增、損將軍兵器歸位，展現威武身段！解密成功，開啟第二步。");
                 document.getElementById('dizang-step-2').style.display = 'block';
             }
         } else {
             const message = giveContextFeedback('wrong');
-            alert(message);
+            showToast(message);
             document.querySelectorAll('#modal-quest .match-item:not(.matched)').forEach(el => el.classList.remove('selected'));
             currentQuestData.char = null;
             currentQuestData.weapon = null;
@@ -1541,14 +1740,14 @@ function clickDrumPad() {
     
     if (currentQuestData.drumHits >= 3) {
         triggerCorrectSfx();
-        alert("【擊鼓定音】\n百年大鼓定音完成！發出宏亮敦厚的聲音，挑戰成功！");
+        showToast("【擊鼓定音】\n百年大鼓定音完成！發出宏亮敦厚的聲音，挑戰成功！");
     }
 }
 
 
 // === 智慧筆使用效果 (關卡提示) ===
 function triggerWenchangItemEffect() {
-    alert("【使用智慧筆】\n開啟考前大加持！文昌魁星賜予智慧，直接為你們點出正確答案！");
+    showToast("【使用智慧筆】\n開啟考前大加持！文昌魁星賜予智慧，直接為你們點出正確答案！");
     const container = document.getElementById('quest-interaction-area');
     const correctBtn = container.querySelector('.option-btn[onclick*="true"]');
     if (correctBtn) {
@@ -1558,7 +1757,7 @@ function triggerWenchangItemEffect() {
         // 自動點擊正確答案
         setTimeout(() => { correctBtn.click(); }, 800);
     } else {
-        alert("此關卡沒有選擇題，智慧筆無法生效，已退回背包！");
+        showToast("此關卡沒有選擇題，智慧筆無法生效，已退回背包！");
         state.inventory.wenchang++;
     }
 }
@@ -1570,7 +1769,7 @@ function submitQuest(stageId) {
     if (!currentQuestData.evidenceReady) {
         const task = stageMediaConfig[stageId];
         const typeName = { photo: '拍照', audio: '口述錄音', text: '文字紀錄' }[task.type];
-        alert(`【探索證據未完成】\n完成原有解謎後，還必須提交「${typeName}」任務才能過關。`);
+        showToast(`【探索證據未完成】\n完成原有解謎後，還必須提交「${typeName}」任務才能過關。`);
         document.getElementById('quest-evidence-area').scrollIntoView({ behavior: 'smooth', block: 'center' });
         return;
     }
@@ -1580,7 +1779,7 @@ function submitQuest(stageId) {
             if (currentQuestData.gatePassed && currentQuestData.bellClicked && currentQuestData.drumClicked) {
                 passed = true;
             } else {
-                alert("您尚未走對路線，或尚未敲響大鐘與大鼓通報！");
+                showToast("您尚未走對路線，或尚未敲響大鐘與大鼓通報！");
             }
             break;
             
@@ -1588,7 +1787,7 @@ function submitQuest(stageId) {
             if (currentQuestData.matches >= 2 && currentQuestData.batsFound >= 3) {
                 passed = true;
             } else {
-                alert("您尚未完成門神配對，或尚未找出 3 隻吉祥蝙蝠！");
+                showToast("您尚未完成門神配對，或尚未找出 3 隻吉祥蝙蝠！");
             }
             break;
             
@@ -1596,7 +1795,7 @@ function submitQuest(stageId) {
             if (currentQuestData.nailsClicked >= 9 && currentQuestData.questionPassed) {
                 passed = true;
             } else {
-                alert("您尚未觸摸門釘，或尚未回答龍柱的問題！");
+                showToast("您尚未觸摸門釘，或尚未回答龍柱的問題！");
             }
             break;
             
@@ -1606,9 +1805,9 @@ function submitQuest(stageId) {
                 // 鹹光餅關卡特權：獲得 2 個實體鹹光餅！
                 state.inventory.bakery += 2;
                 updateInventoryUI();
-                alert("【獲得寶物】\n獲得老店現烤『鹹光餅 x2』！可放入背包隨時食用恢復體力。");
+                showToast("【獲得寶物】\n獲得老店現烤『鹹光餅 x2』！可放入背包隨時食用恢復體力。");
             } else {
-                alert("您尚未回答鹹光餅中間為什麼有洞！");
+                showToast("您尚未回答鹹光餅中間為什麼有洞！");
             }
             break;
             
@@ -1616,7 +1815,7 @@ function submitQuest(stageId) {
             if (currentQuestData.questionPassed && currentQuestData.scratchPassed) {
                 passed = true;
             } else {
-                alert("您尚未回答廣福宮建築特色，或尚未塗抹完成示禁碑拓印！");
+                showToast("您尚未回答廣福宮建築特色，或尚未塗抹完成示禁碑拓印！");
             }
             break;
             
@@ -1626,9 +1825,9 @@ function submitQuest(stageId) {
                 // 文昌祠特權：獲得智慧筆 x1
                 state.inventory.wenchang += 1;
                 updateInventoryUI();
-                alert("【獲得寶物】\n文昌君加持，獲得『智慧筆 x1』！可在答題關卡直接鎖定答案。");
+                showToast("【獲得寶物】\n文昌君加持，獲得『智慧筆 x1』！可在答題關卡直接鎖定答案。");
             } else {
-                alert("您尚未餵食祿馬神，或尚未回答包糕粽問題！");
+                showToast("您尚未餵食祿馬神，或尚未回答包糕粽問題！");
             }
             break;
             
@@ -1636,7 +1835,7 @@ function submitQuest(stageId) {
             if (currentQuestData.shipFound) {
                 passed = true;
             } else {
-                alert("哨兵尚未在河港中找出進犯的敵軍船隻！請左右滑動地圖尋找。");
+                showToast("哨兵尚未在河港中找出進犯的敵軍船隻！請左右滑動地圖尋找。");
             }
             break;
             
@@ -1646,9 +1845,9 @@ function submitQuest(stageId) {
                 // 地藏庵特權：獲得平安符 x1
                 state.inventory.dizang += 1;
                 updateInventoryUI();
-                alert("【獲得寶物】\n大眾爺庇佑，獲得『平安符 x1』！可用於抵擋惡靈答錯的扣分懲罰。");
+                showToast("【獲得寶物】\n大眾爺庇佑，獲得『平安符 x1』！可用於抵擋惡靈答錯的扣分懲罰。");
             } else {
-                alert("您尚未配對官將首兵器，或尚未回答新莊大拜拜問題！");
+                showToast("您尚未配對官將首兵器，或尚未回答新莊大拜拜問題！");
             }
             break;
             
@@ -1656,7 +1855,7 @@ function submitQuest(stageId) {
             if (currentQuestData.questionPassed && currentQuestData.drumHits >= 3) {
                 passed = true;
             } else {
-                alert("您尚未排序製鼓步驟，或尚未敲擊大鼓完成定音！");
+                showToast("您尚未排序製鼓步驟，或尚未敲擊大鼓完成定音！");
             }
             break;
             
@@ -1666,7 +1865,7 @@ function submitQuest(stageId) {
             if (currentQuestData.questionPassed) {
                 passed = true;
             } else {
-                alert("您尚未完成本巷弄的歷史挑戰答題！");
+                showToast("您尚未完成本巷弄的歷史挑戰答題！");
             }
             break;
     }
@@ -1706,8 +1905,11 @@ function submitQuest(stageId) {
         
         // 6. 解鎖地圖連帶點
         updateMapStagesState();
-        
-        alert(`【破解成功】\n挑戰完成！\n小隊獲得積分 +${scoreReward}，並榮獲『${config.badge}』勳章！`);
+
+        // 7. 保存完整進度（含勳章、成果牆、田野紀錄）
+        saveProgress();
+
+        showToast(`【破解成功】\n挑戰完成！\n小隊獲得積分 +${scoreReward}，並榮獲『${config.badge}』勳章！`);
         closeQuestModal();
         
         // 檢查是否所有 3 個主線與 5 個支線都完成，以顯示終極挑戰
@@ -1832,11 +2034,11 @@ function submitFinalAnswer(optIndex, isCorrect) {
     if (isCorrect) {
         const message = giveContextFeedback('correct', answeredQuestion.feedback);
         currentQuestData.correctCount++;
-        alert(message);
+        showToast(message);
     } else {
         const message = giveContextFeedback('wrong', answeredQuestion.hint);
         modifyHp(-10); // 答錯扣 10 體力
-        alert(message);
+        showToast(message);
     }
     
     currentQuestData.currentQ++;
@@ -1950,7 +2152,10 @@ function showFinalReport() {
 // 重新開始遊戲
 function restartGame() {
     triggerClickSfx();
-    
+
+    // 清除存檔，避免重整後又回到舊進度
+    clearProgress();
+
     // 重設狀態
     state.score = 0;
     state.hp = 100;

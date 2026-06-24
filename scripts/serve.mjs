@@ -16,6 +16,9 @@ const mimeTypes = {
   ".jpeg": "image/jpeg",
   ".svg": "image/svg+xml",
   ".wav": "audio/wav",
+  ".mp3": "audio/mpeg",
+  ".m4a": "audio/mp4",
+  ".webm": "audio/webm",
 };
 
 const server = createServer(async (request, response) => {
