@@ -1377,7 +1377,8 @@ function renderQuestInteraction(stageId, container) {
 function chooseTutorialGate(gate) {
     triggerClickSfx();
     if (gate === 'right') {
-        triggerCorrectSfx();
+        // 選對龍門＝新手關的「答對」：播放延伸音檔並顯示文字橫幅
+        giveContextFeedback('correct');
         showToast("【正確】\n龍門進（面朝廟的右手邊）！迎好運成功！開啟進廟第二步。");
         document.getElementById('tutorial-step-2').style.display = 'block';
         currentQuestData.gatePassed = true;
@@ -1428,14 +1429,17 @@ function clickMatch(type, value) {
         }
         
         if (isMatched) {
-            triggerCorrectSfx();
             currentQuestData.matches = (currentQuestData.matches || 0) + 1;
             currentQuestData.hero = null;
             currentQuestData.pos = null;
-            
+
             if (currentQuestData.matches >= 2) {
+                // 門神全數歸位＝慈祐宮的「答對」：播放延伸音檔並顯示文字橫幅
+                giveContextFeedback('correct');
                 showToast("【門神解鎖】\n秦叔寶與尉遲恭兩位門神將軍歸位！解密成功，開啟第二步。");
                 document.getElementById('ciyou-step-2').style.display = 'block';
+            } else {
+                triggerCorrectSfx();
             }
         } else {
             const message = giveContextFeedback('wrong');
@@ -1448,14 +1452,17 @@ function clickMatch(type, value) {
 }
 
 function clickBat(el) {
-    triggerCorrectSfx();
     el.classList.add('found');
     el.innerText = '✨';
     currentQuestData.batsFound = (currentQuestData.batsFound || 0) + 1;
     document.getElementById('ciyou-bat-count').innerText = currentQuestData.batsFound;
-    
+
     if (currentQuestData.batsFound >= 3) {
+        // 三隻蝙蝠全數尋獲＝慈祐宮第二步的「答對」：播放延伸音檔並顯示文字橫幅
+        giveContextFeedback('correct');
         showToast("【蝙蝠賜福】\n成功找出所有 3 隻隱藏的蝙蝠！福氣飛來，挑戰完成！");
+    } else {
+        triggerCorrectSfx();
     }
 }
 
@@ -1604,7 +1611,8 @@ function checkCanvasCleared() {
     if (ratio > 0.45 && !currentQuestData.scratchPassed) {
         currentQuestData.scratchPassed = true;
         ctx.clearRect(0, 0, canvas.width, canvas.height); // 全部擦除
-        triggerCorrectSfx();
+        // 碑文拓印完成＝廣福宮的「答對」：播放延伸音檔並顯示文字橫幅
+        giveContextFeedback('correct');
         showToast("【拓印成功】\n歷史碑文『奉兩憲示禁碑』重見天日！閩粵兩族和平共處，挑戰成功！");
     }
 }
@@ -1674,7 +1682,8 @@ function endPanoDrag() {
 }
 
 function clickEnemyShip(ship) {
-    triggerCorrectSfx();
+    // 找到敵船＝潮江寺的「答對」：播放延伸音檔並顯示文字橫幅
+    giveContextFeedback('correct');
     ship.innerText = '💥🔥';
     ship.style.borderColor = 'var(--color-secondary)';
     currentQuestData.shipFound = true;
@@ -1708,14 +1717,17 @@ function clickFolkMatch(type, value) {
         }
         
         if (isMatched) {
-            triggerCorrectSfx();
             currentQuestData.matches = (currentQuestData.matches || 0) + 1;
             currentQuestData.char = null;
             currentQuestData.weapon = null;
-            
+
             if (currentQuestData.matches >= 2) {
+                // 官將首兵器全數歸位＝地藏庵的「答對」：播放延伸音檔並顯示文字橫幅
+                giveContextFeedback('correct');
                 showToast("【官將首降臨】\n增、損將軍兵器歸位，展現威武身段！解密成功，開啟第二步。");
                 document.getElementById('dizang-step-2').style.display = 'block';
+            } else {
+                triggerCorrectSfx();
             }
         } else {
             const message = giveContextFeedback('wrong');
@@ -1739,7 +1751,8 @@ function clickDrumPad() {
     setTimeout(() => { pad.style.transform = 'scale(1)'; }, 50);
     
     if (currentQuestData.drumHits >= 3) {
-        triggerCorrectSfx();
+        // 大鼓定音完成＝响仁和的「答對」：播放延伸音檔並顯示文字橫幅
+        giveContextFeedback('correct');
         showToast("【擊鼓定音】\n百年大鼓定音完成！發出宏亮敦厚的聲音，挑戰成功！");
     }
 }
