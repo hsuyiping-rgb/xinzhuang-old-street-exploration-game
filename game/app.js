@@ -218,32 +218,6 @@ function synthClick() {
     osc.stop(audioCtx.currentTime + 0.08);
 }
 
-// 🔊 [Fallback] 模擬答對磬音 / 清脆銅鈴聲
-function synthCorrect() {
-    const now = audioCtx.currentTime;
-    // 使用雙振盪器合成清脆罄音
-    const osc1 = audioCtx.createOscillator();
-    const osc2 = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    
-    osc1.connect(gain);
-    osc2.connect(gain);
-    gain.connect(audioCtx.destination);
-    
-    osc1.type = 'sine';
-    osc1.frequency.setValueAtTime(880, now); // A5 磬音高頻
-    osc2.type = 'sine';
-    osc2.frequency.setValueAtTime(1320, now); // E6 諧音
-    
-    gain.gain.setValueAtTime(0.6, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 1.5); // 長尾音
-    
-    osc1.start(now);
-    osc2.start(now);
-    osc1.stop(now + 1.5);
-    osc2.stop(now + 1.5);
-}
-
 // 🔊 [Fallback] 模擬答錯沉悶敲擊聲 (低音悶鑼)
 function synthWrong() {
     const now = audioCtx.currentTime;
@@ -280,6 +254,71 @@ function synthMuffledDrum() {
     
     osc.start(now);
     osc.stop(now + 0.3);
+}
+
+// 🔊 新手關專用：模擬廟宇大鐘 (比答對磬音更大、更長、泛音更厚)
+function synthTempleBell() {
+    const now = audioCtx.currentTime;
+    // 含基音與多個泛音（末段加入不諧泛音，營造金屬鐘體質感），總振幅 < 1 避免破音
+    const partials = [
+        { f: 440,  g: 0.34 }, // 基音
+        { f: 880,  g: 0.24 }, // 八度
+        { f: 1320, g: 0.16 }, // 五度泛音
+        { f: 1760, g: 0.10 }, // 高泛音
+        { f: 2640, g: 0.06 }, // 金屬感不諧泛音
+    ];
+    partials.forEach(p => {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(p.f, now);
+        gain.gain.setValueAtTime(p.g, now);
+        gain.gain.exponentialRampToValueAtTime(0.0008, now + 2.8); // 比磬音長的尾韻
+        osc.start(now);
+        osc.stop(now + 2.9);
+    });
+}
+
+// 🔊 單一大鼓敲擊 (可指定時間與音量)，供節奏排程使用
+function synthDrumHitAt(when, level) {
+    // 低頻鼓身：音高快速下滑製造「咚」的厚實感
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(180, when);
+    osc.frequency.exponentialRampToValueAtTime(45, when + 0.25);
+    gain.gain.setValueAtTime(level, when);
+    gain.gain.exponentialRampToValueAtTime(0.001, when + 0.35);
+    osc.start(when);
+    osc.stop(when + 0.35);
+
+    // 敲擊瞬間的噪音 (鼓棒擊面)，增加打擊感與可聽度
+    const noiseLen = 0.05;
+    const buffer = audioCtx.createBuffer(1, Math.floor(audioCtx.sampleRate * noiseLen), audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = buffer;
+    const nGain = audioCtx.createGain();
+    nGain.gain.setValueAtTime(level * 0.4, when);
+    nGain.gain.exponentialRampToValueAtTime(0.001, when + noiseLen);
+    noise.connect(nGain);
+    nGain.connect(audioCtx.destination);
+    noise.start(when);
+    noise.stop(when + noiseLen);
+}
+
+// 🔊 新手關專用：一小段報廟大鼓節奏 (咚 — 咚-咚 — 咚)，比單擊更大聲、有層次
+function synthDrumRhythm() {
+    const now = audioCtx.currentTime;
+    synthDrumHitAt(now + 0.00, 1.0);  // 重拍
+    synthDrumHitAt(now + 0.35, 0.85);
+    synthDrumHitAt(now + 0.52, 0.85);
+    synthDrumHitAt(now + 0.85, 1.0);  // 收尾重拍
 }
 
 // 🔊 [Fallback] 模擬老虎怒吼聲 (警告走錯虎門)
@@ -421,7 +460,6 @@ function toggleMute() {
 
 // 簡化播放全域音效介面
 function triggerClickSfx() { playSound('sfx_click.mp3', synthClick); }
-function triggerCorrectSfx() { playSound('sfx_correct.mp3', synthCorrect); }
 function triggerWrongSfx() { playSound('sfx_wrong.mp3', synthWrong); }
 function triggerTigerSfx() { playSound('sfx_tiger.mp3', synthTigerRoar); }
 function triggerDrumSfx() { playSound('sfx_drum_big.mp3', synthMuffledDrum); }
@@ -460,8 +498,7 @@ function playCorrectFeedback(stageId, clipNumber, message) {
     audio.play()
         .then(() => console.log(`Playing feedback audio: ${fileName}`))
         .catch(err => {
-            console.warn(`Feedback audio assets/audio/${fileName} unavailable; fallback to SFX + TTS.`, err);
-            triggerCorrectSfx();
+            console.warn(`Feedback audio assets/audio/${fileName} unavailable; fallback to TTS only.`, err);
             speakFeedback(message);
         });
 }
@@ -1391,12 +1428,17 @@ function chooseTutorialGate(gate) {
 
 function clickTutorialInstrument(inst) {
     if (inst === 'bell') {
-        initAudioContext();
-        synthCorrect(); // 磬/鐘聲
+        if (!state.isMuted) {
+            initAudioContext();
+            synthTempleBell(); // 廟宇大鐘：更大、更長的鐘聲
+        }
         showToast("【鐘聲響起】\n迎接神明，宣告你的到來！");
         currentQuestData.bellClicked = true;
     } else {
-        triggerDrumSfx(); // 鼓聲
+        if (!state.isMuted) {
+            initAudioContext();
+            synthDrumRhythm(); // 報廟大鼓：更大聲、帶一小段節奏
+        }
         showToast("【大鼓重擊】\n大鼓通報，宣告探險隊伍抵達！");
         currentQuestData.drumClicked = true;
     }
@@ -1438,8 +1480,6 @@ function clickMatch(type, value) {
                 giveContextFeedback('correct');
                 showToast("【門神解鎖】\n秦叔寶與尉遲恭兩位門神將軍歸位！解密成功，開啟第二步。");
                 document.getElementById('ciyou-step-2').style.display = 'block';
-            } else {
-                triggerCorrectSfx();
             }
         } else {
             const message = giveContextFeedback('wrong');
@@ -1461,8 +1501,6 @@ function clickBat(el) {
         // 三隻蝙蝠全數尋獲＝慈祐宮第二步的「答對」：播放延伸音檔並顯示文字橫幅
         giveContextFeedback('correct');
         showToast("【蝙蝠賜福】\n成功找出所有 3 隻隱藏的蝙蝠！福氣飛來，挑戰完成！");
-    } else {
-        triggerCorrectSfx();
     }
 }
 
@@ -1474,7 +1512,6 @@ function clickNail(btn) {
         currentQuestData.nailsClicked++;
         
         if (currentQuestData.nailsClicked >= 9) {
-            triggerCorrectSfx();
             showToast("【防禦啟動】\n敲擊大門啟動了 108 門釘神盾防禦！開啟第二步問答。");
             document.getElementById('wusheng-step-2').style.display = 'block';
         }
@@ -1628,8 +1665,7 @@ function dragGrass(ev) {
 
 function dropGrass(ev) {
     ev.preventDefault();
-    triggerCorrectSfx();
-    
+
     const grass = document.getElementById('wenchang-grass');
     grass.style.display = 'none';
     
@@ -1726,8 +1762,6 @@ function clickFolkMatch(type, value) {
                 giveContextFeedback('correct');
                 showToast("【官將首降臨】\n增、損將軍兵器歸位，展現威武身段！解密成功，開啟第二步。");
                 document.getElementById('dizang-step-2').style.display = 'block';
-            } else {
-                triggerCorrectSfx();
             }
         } else {
             const message = giveContextFeedback('wrong');
@@ -1884,8 +1918,6 @@ function submitQuest(stageId) {
     }
     
     if (passed) {
-        triggerCorrectSfx();
-        
         // 1. 移入已完成
         state.completedStages.push(stageId);
         
@@ -2059,7 +2091,6 @@ function submitFinalAnswer(optIndex, isCorrect) {
         renderFinalQuestion(currentQuestData.currentQ);
     } else {
         // 完成終極考驗
-        triggerCorrectSfx();
         closeQuestModal();
         showFinalReport();
     }
