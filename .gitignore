@@ -9,3 +9,6 @@ Desktop.ini
 .vscode/
 *.log
 *.tmp
+
+# gpt-image-2 生圖草稿原檔（正式採用的圖已放入 game/assets/images/）
+generated/
