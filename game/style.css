@@ -412,6 +412,73 @@ h2 {
     color: var(--color-accent);
 }
 
+/* 💾 儲存 / 🚪 登出 狀態列按鈕 */
+.btn-save,
+.btn-logout {
+    margin-left: 8px;
+    background: transparent;
+    border: 1px solid var(--color-border);
+    color: var(--color-text-muted);
+    font-family: var(--font-ui);
+    font-size: 0.72rem;
+    padding: 5px 9px;
+    border-radius: var(--radius-md);
+    white-space: nowrap;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.btn-save:hover {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+}
+
+.btn-logout:hover {
+    color: var(--color-text);
+    border-color: var(--color-accent);
+}
+
+/* 自製確認對話框 */
+.confirm-card {
+    background-color: var(--color-card);
+    border: 1.5px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: 24px;
+    max-width: 360px;
+    width: 90%;
+    box-shadow: var(--shadow-soft);
+    text-align: center;
+}
+
+.confirm-msg {
+    color: var(--color-text);
+    margin-bottom: 20px;
+    line-height: 1.7;
+}
+
+.confirm-msg strong {
+    display: block;
+    color: var(--color-accent);
+    font-size: 1.05rem;
+    margin-bottom: 8px;
+}
+
+.confirm-msg span {
+    display: block;
+    font-size: 0.9rem;
+    color: var(--color-text-muted);
+}
+
+.confirm-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+}
+
+.confirm-actions .btn {
+    flex: 1;
+}
+
 .stats {
     display: flex;
     gap: 20px;
@@ -1625,9 +1692,38 @@ h2 {
 /* 📱 8. 平板與手機 RWD media queries */
 @media (max-width: 768px) {
     .status-bar {
-        padding: 10px 15px;
+        padding: 10px 60px 10px 12px; /* 右側留白給固定的音效鈕 */
     }
-    
+
+    .team-info {
+        min-width: 0;
+        gap: 8px;
+    }
+
+    .team-name {
+        max-width: 90px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .role-name {
+        white-space: nowrap;
+    }
+
+    /* 手機版狀態列空間有限：儲存／登出只留圖示 */
+    .btn-save .btn-txt,
+    .btn-logout .btn-txt {
+        display: none;
+    }
+
+    .btn-save,
+    .btn-logout {
+        margin-left: 6px;
+        padding: 6px 8px;
+        font-size: 0.9rem;
+    }
+
     .hp-bar-bg {
         width: 100px;
     }

@@ -606,6 +606,7 @@ function giveContextFeedback(type, explicitMessage = '') {
 
 
 // 3. 🖥️ 畫面導航與初始化
+let pendingSave = null; // 啟動時偵測到的存檔，供「繼續上次進度」按鈕使用
 window.addEventListener('DOMContentLoaded', () => {
     // 模擬載入進度條
     let progress = 0;
@@ -616,11 +617,15 @@ window.addEventListener('DOMContentLoaded', () => {
         progressFill.style.width = `${progress}%`;
         if (progress >= 100) {
             clearInterval(loadTimer);
-            // 若偵測到先前未完成的探索進度，直接回復到遊戲畫面
+            // 一律先顯示故事介紹／組隊畫面；若偵測到先前存檔，提供「繼續上次進度」按鈕
+            showScreen('screen-intro');
             if (saved && saved.teamName && saved.role) {
-                restoreProgress(saved);
-            } else {
-                showScreen('screen-intro');
+                pendingSave = saved;
+                const resumeBtn = document.getElementById('btn-resume');
+                if (resumeBtn) {
+                    resumeBtn.textContent = `🔄 繼續「${saved.teamName}」的進度`;
+                    resumeBtn.style.display = 'block';
+                }
             }
         }
     }, 80);
@@ -684,6 +689,62 @@ function showToast(message, options = {}) {
     return toast;
 }
 
+// 自製確認對話框（取代原生 confirm，符合遊戲風格且不阻斷）
+function showConfirm(message, onConfirm, confirmLabel = '確定') {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay confirm-overlay';
+    overlay.style.display = 'flex';
+
+    const card = document.createElement('div');
+    card.className = 'confirm-card';
+
+    const msg = document.createElement('div');
+    msg.className = 'confirm-msg';
+    message.split('\n').filter(line => line.trim() !== '').forEach((line, index) => {
+        const row = document.createElement(index === 0 ? 'strong' : 'span');
+        row.textContent = line;
+        msg.appendChild(row);
+    });
+    card.appendChild(msg);
+
+    const actions = document.createElement('div');
+    actions.className = 'confirm-actions';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'btn btn-outline';
+    cancelBtn.textContent = '取消';
+    cancelBtn.onclick = () => { triggerClickSfx(); overlay.remove(); };
+
+    const okBtn = document.createElement('button');
+    okBtn.className = 'btn btn-primary';
+    okBtn.textContent = confirmLabel;
+    okBtn.onclick = () => { overlay.remove(); onConfirm(); };
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(okBtn);
+    card.appendChild(actions);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+}
+
+// 登出目前組隊進度：清除本機存檔並回到組隊畫面
+function logoutTeam() {
+    triggerClickSfx();
+    showConfirm(
+        '確定要登出目前的組隊進度嗎？\n此動作會清除本機存檔並回到組隊畫面，進度將無法復原。',
+        () => {
+            triggerClickSfx();
+            clearProgress();
+            if (state.bgmInterval) {
+                clearInterval(state.bgmInterval);
+                state.bgmInterval = null;
+            }
+            location.reload();
+        },
+        '登出並清除'
+    );
+}
+
 // 進度自動保存（localStorage）— 避免平板誤觸重整導致整場進度歸零
 const SAVE_KEY = 'xinzhuang-oldstreet-save-v1';
 const PERSIST_FIELDS = [
@@ -694,7 +755,7 @@ const PERSIST_FIELDS = [
 
 function saveProgress() {
     // 尚未選好隊名／角色（還沒正式開始）就不保存
-    if (!state.teamName || !state.role) return;
+    if (!state.teamName || !state.role) return false;
 
     const data = {};
     PERSIST_FIELDS.forEach(key => { data[key] = state[key]; });
@@ -702,6 +763,7 @@ function saveProgress() {
 
     try {
         localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+        return true;
     } catch (err) {
         // 多半是實拍照片的 base64 撐爆配額：改存不含照片影像的精簡版
         try {
@@ -713,9 +775,21 @@ function saveProgress() {
                 }))
             };
             localStorage.setItem(SAVE_KEY, JSON.stringify(slim));
+            return true;
         } catch (err2) {
             console.warn('進度保存失敗：', err2);
+            return false;
         }
+    }
+}
+
+// 玩家手動儲存進度（遊戲頁面「儲存」按鈕）
+function saveProgressManually() {
+    triggerClickSfx();
+    if (saveProgress()) {
+        showToast('【進度已儲存】\n目前的探索進度已存到這台裝置，下次可在組隊畫面點「繼續進度」接續。', { type: 'success' });
+    } else {
+        showToast('進度儲存失敗，請稍後再試，或確認瀏覽器儲存空間是否已滿。', { type: 'warn' });
     }
 }
 
@@ -794,6 +868,14 @@ function showScreen(screenId) {
             clearInterval(state.bgmInterval);
             state.bgmInterval = null;
         }
+    }
+}
+
+// 從 intro 畫面點「繼續上次進度」還原存檔
+function resumeSavedProgress() {
+    triggerClickSfx();
+    if (pendingSave) {
+        restoreProgress(pendingSave);
     }
 }
 
