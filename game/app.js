@@ -392,41 +392,115 @@ function synthOperaMelody() {
     });
 }
 
-// 🎵 [Fallback] 模擬古琴《高山》背景音樂 (隨機宮商角徵羽五聲音階旋律)
+// 🎵 [Fallback] 老街廟埕氛圍配樂：固定旋律動機 + 泛音 + 空間殘響 + 低音鋪底
+// (取代原本隨機單音嗶聲，改用五聲音階譜成的簡短動機，起伏後收束於主音，反覆吟唱)
+let bgmDelayNode = null;
+let bgmDelayFeedback = null;
+let bgmTick = 0;
+
+function ensureBgmReverbBus() {
+    if (bgmDelayNode) return;
+    bgmDelayNode = audioCtx.createDelay(2.0);
+    bgmDelayNode.delayTime.value = 0.42;
+    bgmDelayFeedback = audioCtx.createGain();
+    bgmDelayFeedback.gain.value = 0.32; // 廟埕空間殘響回饋量
+    bgmDelayNode.connect(bgmDelayFeedback);
+    bgmDelayFeedback.connect(bgmDelayNode);
+    bgmDelayNode.connect(audioCtx.destination);
+}
+
 function playSynthBgm() {
     if (state.isMuted) return;
-    
-    // 宮商角徵羽頻率 (C5, D5, E5, G5, A5)
-    const pentatonic = [523.25, 587.33, 659.25, 783.99, 880.00];
-    
+
+    // 宮商角徵羽頻率：高音旋律線 (箏/笛音) 與低音鋪底 (磬/鐘)
+    const melodyScale = [523.25, 587.33, 659.25, 783.99, 880.00]; // C5 D5 E5 G5 A5
+    const droneScale = [261.63, 293.66, 329.63, 392.00, 440.00];  // C4 D4 E4 G4 A4
+
+    // 簡短動機：模擬入港、市集、廟會的起伏意象，-1 為休止符讓殘響延續
+    const phrase = [0, 2, 4, 3, 2, 4, 3, 1, 2, 0, 2, 1, 0, -1, 0, -1];
+
     if (state.bgmInterval) clearInterval(state.bgmInterval);
-    
-    const playNote = () => {
-        if (state.isMuted || state.screen !== 'game') return;
-        
+    bgmTick = 0;
+
+    const playMelodyNote = (scaleIndex) => {
+        if (scaleIndex < 0) return;
         initAudioContext();
+        ensureBgmReverbBus();
         const now = audioCtx.currentTime;
-        const note = pentatonic[Math.floor(Math.random() * pentatonic.length)];
-        
+        const freq = melodyScale[scaleIndex];
+
         const osc = audioCtx.createOscillator();
+        const overtone = audioCtx.createOscillator();
+        const vibrato = audioCtx.createOscillator();
+        const vibratoGain = audioCtx.createGain();
         const gain = audioCtx.createGain();
+        const overtoneGain = audioCtx.createGain();
+        const panner = audioCtx.createStereoPanner();
+
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, now);
+        overtone.type = 'sine';
+        overtone.frequency.setValueAtTime(freq * 2, now); // 八度泛音，模擬箏弦泛音
+        overtoneGain.gain.value = 0.045;
+
+        // 微幅顫音，模擬手指按弦的自然抖動，避免死板的純電子音
+        vibrato.type = 'sine';
+        vibrato.frequency.value = 4.2;
+        vibratoGain.gain.value = 2.5;
+        vibrato.connect(vibratoGain);
+        vibratoGain.connect(osc.frequency);
+
+        panner.pan.value = (Math.random() - 0.5) * 0.7; // 左右輕微飄移，增加空間感
+
         osc.connect(gain);
-        gain.connect(audioCtx.destination);
-        
-        osc.type = 'sine'; // 古琴柔和的弦音
-        osc.frequency.setValueAtTime(note, now);
-        
+        overtone.connect(overtoneGain);
+        overtoneGain.connect(gain);
+        gain.connect(panner);
+        panner.connect(audioCtx.destination);
+        panner.connect(bgmDelayNode); // 送一部分訊號進殘響匯流排
+
         gain.gain.setValueAtTime(0.0, now);
-        gain.gain.linearRampToValueAtTime(0.15, now + 0.1); // 柔和起音
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 2.5); // 長尾音衰減
-        
-        osc.start(now);
-        osc.stop(now + 2.6);
+        gain.gain.linearRampToValueAtTime(0.13, now + 0.12); // 柔和起音，像撥弦
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 2.6); // 長尾音衰減
+
+        osc.start(now); overtone.start(now); vibrato.start(now);
+        osc.stop(now + 2.7); overtone.stop(now + 2.7); vibrato.stop(now + 2.7);
     };
-    
-    // 每 3 秒隨機播放一個古琴音符，模擬古琴即興演奏
-    state.bgmInterval = setInterval(playNote, 2200);
-    playNote();
+
+    const playDroneNote = () => {
+        initAudioContext();
+        ensureBgmReverbBus();
+        const now = audioCtx.currentTime;
+        const freq = droneScale[Math.floor(Math.random() * droneScale.length)];
+
+        // 三個微差音高疊加，模擬多聲部鋪底的溫暖厚度
+        [1, 1.005, 0.997].forEach((detune) => {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq * detune, now);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            gain.connect(bgmDelayNode);
+
+            gain.gain.setValueAtTime(0.0, now);
+            gain.gain.linearRampToValueAtTime(0.035, now + 3); // 極緩起音，鋪底不搶戲
+            gain.gain.linearRampToValueAtTime(0.0, now + 9);
+
+            osc.start(now);
+            osc.stop(now + 9.2);
+        });
+    };
+
+    const tick = () => {
+        if (state.isMuted || state.screen !== 'game') return;
+        playMelodyNote(phrase[bgmTick % phrase.length]);
+        if (bgmTick % 4 === 0) playDroneNote(); // 每四拍鋪一層低音底韻，模擬老街市集的悠遠鐘磬聲
+        bgmTick++;
+    };
+
+    state.bgmInterval = setInterval(tick, 2200);
+    tick();
 }
 
 // 全域切換靜音
