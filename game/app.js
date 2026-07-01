@@ -813,9 +813,15 @@ function simulateGps(stageId) {
     state.currentGps = stageId;
     const config = stagesConfig[stageId] || { title: '老街巷弄' };
     document.getElementById('gps-status').innerText = `目前位置：靠近 ${config.title.split('：')[0]}`;
-    
+
     // 檢查是否可觸發解鎖
     tryUnlockStage(stageId);
+
+    // 選定位置後自動收合面板，避免遮擋剛解鎖的地圖標記
+    const body = document.getElementById('gps-panel-body');
+    const arrow = document.getElementById('gps-toggle-arrow');
+    body.style.display = 'none';
+    arrow.innerText = '▼';
 }
 
 // 嘗試解鎖關卡 (根據 GPS 與關卡相依性)
